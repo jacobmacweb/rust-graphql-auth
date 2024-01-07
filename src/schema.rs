@@ -1,40 +1,28 @@
 use juniper::{EmptySubscription, FieldError, FieldResult, RootNode};
-use juniper::{GraphQLInputObject, GraphQLObject};
-
-use jsonwebtoken::{decode, encode, Algorithm, DecodingKey, EncodingKey, Header, Validation};
 use juniper_compose::{composable_object, composite_object};
-use serde::{Deserialize, Serialize};
+use sqlx::SqlitePool;
 
-/// Our claims struct, it needs to derive `Serialize` and/or `Deserialize`
-#[derive(Debug, Serialize, Deserialize)]
-struct Claims {
-    sub: String,
-    exp: usize,
+use crate::db::models::User;
+
+pub struct Context {
+    pub pool: SqlitePool,
+    pub user: Option<User>,
 }
 
-#[derive(GraphQLObject)]
-#[graphql(description = "Response with token")]
-struct AuthResponse {
-    token: String,
-}
+impl juniper::Context for Context {}
 
-#[derive(GraphQLObject)]
-#[graphql(description = "Response with username")]
-struct IdentityResponse {
-    username: String,
-}
+impl Context {
+    /**
+     * This will return a user if the token is valid, otherwise it will abort the request. Use
+     * context.user to get the user and not abort the request, this will be None if the
+     * token is invalid.
+     */
 
-#[derive(GraphQLInputObject)]
-#[graphql(description = "Login details")]
-struct LoginVariables {
-    username: String,
-    password: String,
-}
-
-#[derive(GraphQLInputObject)]
-#[graphql(description = "Login details")]
-struct AuthVariables {
-    token: String,
+    pub fn require_user(&self) -> FieldResult<&User> {
+        self.user
+            .as_ref()
+            .ok_or_else(|| FieldError::from("Unauthorized, valid token required"))
+    }
 }
 
 // Testing juniper compose
@@ -42,63 +30,17 @@ struct AuthVariables {
 pub struct TestQueries;
 
 #[composable_object]
-#[juniper::graphql_object]
+#[juniper::graphql_object(Context = Context)]
 impl TestQueries {
     fn api_version() -> &'static str {
         "1.0"
     }
 }
 
-#[derive(Default)]
-pub struct AuthQueries;
+composite_object!(pub RootQuery<Context = Context>(TestQueries, crate::objects::auth::AuthQueries));
+composite_object!(pub RootMutation<Context = Context>(crate::objects::auth::AuthMutations));
 
-#[composable_object]
-#[juniper::graphql_object]
-impl AuthQueries {
-    fn who_am_i(cred: AuthVariables) -> FieldResult<IdentityResponse> {
-        // Decode cred.token
-        let token = decode::<Claims>(
-            &cred.token,
-            &DecodingKey::from_secret("secret".as_ref()),
-            &Validation::default(),
-        );
-
-        match token {
-            Ok(token) => Ok(IdentityResponse {
-                username: token.claims.sub,
-            }),
-            Err(_) => Err(FieldError::from("Invalid token")),
-        }
-    }
-}
-
-#[derive(Default)]
-pub struct AuthMutations;
-
-#[composable_object]
-#[juniper::graphql_object]
-impl AuthMutations {
-    fn login(cred: LoginVariables) -> FieldResult<AuthResponse> {
-        // Just make a fake token
-        let claims = Claims {
-            sub: cred.username,
-            exp: 10000000000,
-        };
-
-        let token = encode(
-            &Header::default(),
-            &claims,
-            &EncodingKey::from_secret("secret".as_ref()),
-        )?;
-
-        Ok(AuthResponse { token })
-    }
-}
-
-composite_object!(pub RootQuery(TestQueries, AuthQueries));
-composite_object!(pub RootMutation(AuthMutations));
-
-pub type Schema = RootNode<'static, RootQuery, RootMutation, EmptySubscription>;
+pub type Schema = RootNode<'static, RootQuery, RootMutation, EmptySubscription<Context>>;
 
 pub fn create_schema() -> Schema {
     Schema::new(RootQuery, RootMutation, EmptySubscription::new())
