@@ -7,7 +7,7 @@ use actix_web::{
     App, HttpRequest, HttpResponse, HttpServer, Responder,
 };
 use actix_web_lab::respond::Html;
-use juniper::http::{graphiql::graphiql_source, GraphQLRequest};
+use juniper::http::{graphiql::graphiql_source, playground::playground_source, GraphQLRequest};
 use sqlx::{Pool, Sqlite};
 #[macro_use]
 extern crate juniper;
@@ -15,14 +15,14 @@ mod db;
 mod objects;
 mod schema;
 use crate::{
-    objects::auth::check_authorization_header,
+    objects::auth::{check_token, TokenTypes},
     schema::{create_schema, Context, Schema},
 };
 use dotenv::dotenv;
 
 #[get("/graphiql")]
 async fn graphql_playground() -> impl Responder {
-    Html(graphiql_source("/graphql", None))
+    Html(playground_source("/graphql", None))
 }
 
 /// GraphQL endpoint
@@ -34,16 +34,16 @@ async fn graphql(
     // Use to get header to mark user as authenticated or not
     req: HttpRequest,
 ) -> impl Responder {
-    let user = check_authorization_header(
+    let user_id = check_token(
         req.headers()
             .get("Authorization")
             .map(|header| header.to_str().unwrap_or("")),
-        pool.get_ref(),
+        TokenTypes::Access,
     )
     .await;
     let ctx = Context {
         pool: pool.get_ref().clone(),
-        user,
+        user_id,
     };
 
     let user = data.execute(&st, &ctx).await;

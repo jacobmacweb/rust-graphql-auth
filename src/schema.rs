@@ -6,7 +6,7 @@ use crate::db::models::User;
 
 pub struct Context {
     pub pool: SqlitePool,
-    pub user: Option<User>,
+    pub user_id: Option<i32>,
 }
 
 impl juniper::Context for Context {}
@@ -18,10 +18,22 @@ impl Context {
      * token is invalid.
      */
 
-    pub fn require_user(&self) -> FieldResult<&User> {
-        self.user
-            .as_ref()
-            .ok_or_else(|| FieldError::from("Unauthorized, valid token required"))
+    pub async fn require_user(&self) -> FieldResult<User> {
+        let user = sqlx::query_as::<_, User>(
+            r#"
+            SELECT * FROM users WHERE id = $1;
+            "#,
+        )
+        .bind(self.user_id)
+        .fetch_one(&self.pool)
+        .await;
+
+        match user {
+            Ok(user) => Ok(user),
+            Err(_) => Err(FieldError::from(
+                "Invalid token. Is it expired or the wrong type?",
+            )),
+        }
     }
 }
 
